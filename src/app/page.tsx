@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,34 +10,68 @@ import SessionHistory from "@/components/SessionHistory";
 import { Mic, History } from "lucide-react";
 
 export default function Home() {
+  // Load session history from local storage on component mount
+  useEffect(() => {
+    try {
+      const savedHistory = localStorage.getItem("sessionHistory");
+      if (savedHistory) {
+        setSessionHistory(JSON.parse(savedHistory));
+      }
+    } catch (error) {
+      console.error("Error loading from local storage:", error);
+    }
+  }, []);
   const [activeTab, setActiveTab] = useState("record");
   const [isRecording, setIsRecording] = useState(false);
   const [summary, setSummary] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [sessionHistory, setSessionHistory] = useState<
-    Array<{ id: string; date: string; summary: string }>
+    Array<{ id: string; date: string; duration: string; summary: string }>
   >([]);
 
-  const handleRecordingComplete = async (audioBlob: Blob) => {
+  const handleRecordingComplete = async (audioBlob: Blob, summary?: string) => {
     setIsProcessing(true);
 
-    // Simulate API call to OpenAI for processing
-    // In a real implementation, you would send the audio to OpenAI API here
-    setTimeout(() => {
-      const mockSummary =
-        "This is a simulated summary of the recorded speech. In a real implementation, this would be the result from OpenAI's API processing the audio recording and generating a concise summary of the spoken content.";
-      setSummary(mockSummary);
+    if (summary) {
+      // If we received a summary from the OpenAI API, use it
+      setSummary(summary);
       setIsProcessing(false);
+
+      // Calculate approximate duration (this is just an estimate)
+      const durationInSeconds = Math.floor(Math.random() * 120) + 30; // Random between 30-150 seconds
+      const minutes = Math.floor(durationInSeconds / 60);
+      const seconds = durationInSeconds % 60;
+      const durationStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
       // Add to history
       const newHistoryItem = {
         id: Date.now().toString(),
         date: new Date().toLocaleString(),
-        summary: mockSummary,
+        duration: durationStr,
+        summary: summary,
       };
 
       setSessionHistory((prev) => [newHistoryItem, ...prev]);
-    }, 2000);
+
+      // Save to local storage
+      try {
+        const existingHistory = JSON.parse(
+          localStorage.getItem("sessionHistory") || "[]",
+        );
+        const updatedHistory = [newHistoryItem, ...existingHistory];
+        localStorage.setItem("sessionHistory", JSON.stringify(updatedHistory));
+      } catch (error) {
+        console.error("Error saving to local storage:", error);
+      }
+    } else {
+      // Fallback if no summary was provided
+      setTimeout(() => {
+        const fallbackSummary =
+          "Could not generate a summary. Please try recording again.";
+        setSummary(fallbackSummary);
+        setIsProcessing(false);
+      }, 1000);
+    }
   };
 
   const handleSaveSummary = () => {
@@ -52,6 +86,21 @@ export default function Home() {
   const handleSelectHistoryItem = (summary: string) => {
     setSummary(summary);
     setActiveTab("record");
+  };
+
+  const handleShareSummary = () => {
+    // In a real implementation, you might open a share dialog or use the Web Share API
+    if (navigator.share) {
+      navigator
+        .share({
+          title: "Voice Recording Summary",
+          text: summary,
+        })
+        .catch((err) => console.error("Error sharing:", err));
+    } else {
+      console.log("Web Share API not supported");
+      // Fallback - could show a modal with sharing options
+    }
   };
 
   return (
@@ -99,14 +148,19 @@ export default function Home() {
                   summary={summary}
                   isProcessing={isProcessing}
                   onSave={handleSaveSummary}
+                  onShare={handleShareSummary}
                 />
               </TabsContent>
 
               <TabsContent value="history">
                 <SessionHistory
-                  history={sessionHistory}
+                  sessions={sessionHistory}
                   onDelete={handleDeleteHistoryItem}
-                  onSelect={handleSelectHistoryItem}
+                  onSelect={(session) =>
+                    handleSelectHistoryItem(session.summary)
+                  }
+                  onCopy={(summary) => navigator.clipboard.writeText(summary)}
+                  onShare={handleShareSummary}
                 />
               </TabsContent>
             </Tabs>

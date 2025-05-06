@@ -5,11 +5,13 @@ import React, { useRef, useEffect, useState } from "react";
 interface AudioVisualizerProps {
   isRecording?: boolean;
   audioStream?: MediaStream | null;
+  audioData?: Float32Array | null;
 }
 
 const AudioVisualizer = ({
   isRecording = false,
   audioStream = null,
+  audioData = null,
 }: AudioVisualizerProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
@@ -19,15 +21,18 @@ const AudioVisualizer = ({
 
   useEffect(() => {
     // Initialize audio context
-    if (!audioContext) {
-      const newAudioContext = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
-      setAudioContext(newAudioContext);
+    if (!audioContext && typeof window !== "undefined") {
+      const AudioContext =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) {
+        const newAudioContext = new AudioContext();
+        setAudioContext(newAudioContext);
+      }
     }
 
     return () => {
-      if (audioContext) {
-        cancelAnimationFrame(animationRef.current!);
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
       }
     };
   }, [audioContext]);
@@ -113,7 +118,7 @@ const AudioVisualizer = ({
   }, [isRecording, audioStream, audioContext]);
 
   return (
-    <div className="w-full h-[120px] bg-background rounded-lg p-2 border border-border">
+    <div className="w-full h-[120px] bg-background rounded-lg p-2 border border-border relative">
       <canvas
         ref={canvasRef}
         className="w-full h-full bg-background rounded-lg"

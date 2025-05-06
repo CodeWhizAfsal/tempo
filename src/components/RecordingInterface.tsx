@@ -5,59 +5,29 @@ import { Mic, Square, Loader } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import AudioVisualizer from "./AudioVisualizer";
+import OpenAI from "openai";
 
 interface RecordingInterfaceProps {
-  onRecordingComplete?: (audioBlob: Blob) => void;
+  isRecording?: boolean;
+  setIsRecording?: (isRecording: boolean) => void;
+  onRecordingComplete?: (audioBlob: Blob, summary?: string) => void;
   onProcessingStart?: () => void;
 }
 
 const RecordingInterface = ({
+  isRecording = false,
+  setIsRecording = () => {},
   onRecordingComplete = () => {},
   onProcessingStart = () => {},
 }: RecordingInterfaceProps) => {
-  const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [audioData, setAudioData] = useState<Float32Array | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Set up audio context and analyzer for visualization
-  const setupAudioContext = async (stream: MediaStream) => {
-    const audioContext = new (window.AudioContext ||
-      (window as any).webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
-
-    const source = audioContext.createMediaStreamSource(stream);
-    source.connect(analyser);
-
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
-
-    // Start visualization loop
-    visualize();
-  };
-
-  // Visualization function
-  const visualize = () => {
-    if (!analyserRef.current) return;
-
-    const bufferLength = analyserRef.current.frequencyBinCount;
-    const dataArray = new Float32Array(bufferLength);
-
-    analyserRef.current.getFloatTimeDomainData(dataArray);
-    setAudioData(dataArray);
-
-    if (isRecording && !isPaused) {
-      requestAnimationFrame(visualize);
-    }
-  };
 
   // Start recording function
   const startRecording = async () => {
@@ -65,6 +35,7 @@ const RecordingInterface = ({
       audioChunksRef.current = [];
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setAudioStream(stream);
 
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -75,18 +46,27 @@ const RecordingInterface = ({
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, {
           type: "audio/webm",
         });
         setIsProcessing(true);
         onProcessingStart();
-        onRecordingComplete(audioBlob);
+
+        try {
+          // Process the audio with OpenAI
+          const summary = await processAudioWithOpenAI(audioBlob);
+          // Pass both the audio blob and the summary to the parent component
+          onRecordingComplete(audioBlob, summary);
+        } catch (error) {
+          console.error("Error processing audio with OpenAI:", error);
+          // Return a user-friendly error message instead of throwing
+          return "Sorry, there was an error processing your recording. Please check your API key and try again.";
+        }
       };
 
-      await setupAudioContext(stream);
-
-      mediaRecorder.start();
+      // Request data every second to ensure we capture audio even if stop fails
+      mediaRecorder.start(1000);
       setIsRecording(true);
       setIsPaused(false);
 
@@ -99,16 +79,75 @@ const RecordingInterface = ({
     }
   };
 
+  // Process audio with OpenAI
+  const processAudioWithOpenAI = async (audioBlob: Blob) => {
+    try {
+      console.log("Processing audio with OpenAI...");
+
+      // Create a file from the audio blob
+      const file = new File([audioBlob], "recording.webm", {
+        type: "audio/webm",
+      });
+
+      // Create a FormData object to send the file
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("model", "whisper-1");
+
+      // Send the audio to OpenAI's Whisper API for transcription
+      const openai = new OpenAI({
+        apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
+        dangerouslyAllowBrowser: true, // Note: In production, you should use a server-side API
+      });
+
+      // First, transcribe the audio to text
+      const transcription = await openai.audio.transcriptions.create({
+        file: file,
+        model: "whisper-1",
+      });
+
+      console.log("Transcription complete:", transcription.text);
+
+      // Then, generate a summary of the transcription using GPT
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a helpful assistant that summarizes transcribed speech. Create a concise summary that captures the key points.",
+          },
+          {
+            role: "user",
+            content: transcription.text,
+          },
+        ],
+      });
+
+      const summary = completion.choices[0].message.content;
+      console.log("Summary generated:", summary);
+
+      return summary;
+    } catch (error) {
+      console.error("Error processing audio with OpenAI:", error);
+      throw error;
+    }
+  };
+
   // Stop recording function
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    if (!mediaRecorderRef.current || !isRecording) return;
+
+    try {
+      // Only call stop if the state is not already inactive
+      if (mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
 
       // Stop all tracks on the stream
-      if (mediaRecorderRef.current.stream) {
-        mediaRecorderRef.current.stream
-          .getTracks()
-          .forEach((track) => track.stop());
+      if (audioStream) {
+        audioStream.getTracks().forEach((track) => track.stop());
+        setAudioStream(null);
       }
 
       // Clear timer
@@ -117,6 +156,11 @@ const RecordingInterface = ({
         timerRef.current = null;
       }
 
+      setIsRecording(false);
+      setRecordingTime(0);
+    } catch (error) {
+      console.error("Error stopping recording:", error);
+      // Even if there's an error, we should reset the state
       setIsRecording(false);
       setRecordingTime(0);
     }
@@ -136,27 +180,41 @@ const RecordingInterface = ({
         clearInterval(timerRef.current);
       }
 
+      if (audioStream) {
+        audioStream.getTracks().forEach((track) => track.stop());
+      }
+
       if (
         mediaRecorderRef.current &&
         mediaRecorderRef.current.state !== "inactive"
       ) {
-        mediaRecorderRef.current.stop();
-      }
-
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (error) {
+          console.error("Error stopping media recorder during cleanup:", error);
+        }
       }
     };
-  }, []);
+  }, [audioStream]);
+
+  // Handle recording state changes from parent component
+  useEffect(() => {
+    if (isRecording && !mediaRecorderRef.current) {
+      startRecording();
+    } else if (!isRecording && mediaRecorderRef.current) {
+      stopRecording();
+    }
+  }, [isRecording]);
 
   return (
     <Card className="w-full max-w-3xl mx-auto bg-background border-border">
       <CardContent className="p-6 flex flex-col items-center">
         <div className="w-full mb-6">
-          {isRecording && audioData && (
-            <AudioVisualizer audioData={audioData} />
-          )}
-          {!isRecording && !isProcessing && (
+          <AudioVisualizer
+            isRecording={isRecording}
+            audioStream={audioStream}
+          />
+          {!isRecording && !isProcessing && !audioStream && (
             <div className="h-[120px] flex items-center justify-center text-muted-foreground">
               <p>Click the microphone button to start recording</p>
             </div>

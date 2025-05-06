@@ -21,6 +21,7 @@ import {
 interface SummaryDisplayProps {
   summary: string;
   isLoading?: boolean;
+  isProcessing?: boolean;
   onCopy?: () => void;
   onSave?: () => void;
   onShare?: () => void;
@@ -29,6 +30,7 @@ interface SummaryDisplayProps {
 const SummaryDisplay = ({
   summary = "",
   isLoading = false,
+  isProcessing = false,
   onCopy = () => {
     navigator.clipboard.writeText(summary);
   },
@@ -49,12 +51,17 @@ const SummaryDisplay = ({
         <CardTitle className="text-xl font-semibold">Summary</CardTitle>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
+        {isLoading || isProcessing ? (
           <div className="space-y-2">
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-[90%]" />
             <Skeleton className="h-4 w-[95%]" />
             <Skeleton className="h-4 w-[85%]" />
+            {isProcessing && (
+              <p className="text-sm text-muted-foreground mt-4">
+                Processing your recording...
+              </p>
+            )}
           </div>
         ) : summary ? (
           <div className="text-base leading-relaxed whitespace-pre-wrap">
